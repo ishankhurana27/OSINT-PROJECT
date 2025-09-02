@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual environments
+venv*/
+ENV/
+env/
+
+# VS Code
+.vscode/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Session files
+*.session
+
+# Log files
+*.log
+
+# Database configs
+*.db
+
+# Minio and Mongo config cache
+*.minio_config*
+*.mongo_config*
+
+# Images and outputs
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Misc
+*.bak
+*.swp
+*.swo
+
+# Ignore requirements.txt backup
+requirements*.bak
