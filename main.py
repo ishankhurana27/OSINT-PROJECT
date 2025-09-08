@@ -1,100 +1,274 @@
+# import os
+# import io
+# import time
+# import schedule
+# from dotenv import load_dotenv
+# from telethon import TelegramClient
+# from datetime import datetime
+# from db.es_config import es, index_name
+# from db.minio_config import minio_client, bucket_name
+# from search import app  # import FastAPI instance from search.py
+
+
+# # ---------------------------
+# # Load .env
+# # ---------------------------
+# load_dotenv()
+
+# # ---------------------------
+# # Telegram Config
+# # ---------------------------
+# TELEGRAM_API_ID = int(os.getenv("API_ID"))
+# TELEGRAM_API_HASH = os.getenv("API_HASH")
+# TELEGRAM_PHONE = os.getenv("PHONE")
+# TELEGRAM_SESSION = "telegram_session"
+
+# # Channels (IDs or usernames) → add multiple
+# CHAT_IDS = [
+#     "DSquadOfficial"
+# ]
+
+# telegram = TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+
+
+# # ---------------------------
+# # Helpers
+# # ---------------------------
+# def clean_for_indexing(doc):
+#     """Convert datetime to ISO string for ES."""
+#     return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in doc.items()}
+
+
+# def message_exists(chat_id, message_id):
+#     """Check if message already exists in Elasticsearch."""
+#     doc_id = f"{chat_id}_{message_id}"
+#     return es.exists(index=index_name, id=doc_id)
+
+
+# # ---------------------------
+# # Main fetch
+# # ---------------------------
+# async def fetch_and_store(chat_id):
+#     print(f"📌 Fetching messages from {chat_id}...")
+#     success_es, skipped, fail_es = 0, 0, 0
+
+#     async for message in telegram.iter_messages(chat_id, limit=50):
+#         if not (message.text or message.media):
+#             continue
+
+#         # Skip if already indexed
+#         if message_exists(chat_id, message.id):
+#             skipped += 1
+#             continue
+
+#         media_url = None
+#         if message.media:
+#             file_name = f"{chat_id}_{message.id}"
+
+#             try:
+#                 # --- In-memory upload to MinIO ---
+#                 buffer = io.BytesIO()
+#                 await message.download_media(file=buffer)
+#                 buffer.seek(0)
+#                 minio_client.put_object(
+#                     bucket_name,
+#                     file_name,
+#                     buffer,
+#                     length=len(buffer.getvalue()),
+#                     content_type="application/octet-stream"
+#                 )
+
+#                 media_url = f"http://{os.getenv('MINIO_ENDPOINT')}/{bucket_name}/{file_name}"
+#                 print(f"✅ Stored media {file_name} in MinIO")
+
+#             except Exception as e:
+#                 print(f"⚠️ Media upload failed (msg {message.id}): {e}")
+
+#         doc = {
+#             "message_id": str(message.id),
+#             "text": message.text,
+#             "date": message.date,
+#             "sender_id": str(message.sender_id) if message.sender_id else None,
+#             "chat_id": str(chat_id),
+#             "media_url": media_url,
+#         }
+
+#         clean_doc = clean_for_indexing(doc)
+
+#         try:
+#             es.index(index=index_name, id=f"{chat_id}_{doc['message_id']}", document=clean_doc)
+#             success_es += 1
+#             print(f"✅ ES: Inserted message {doc['message_id']}")
+#         except Exception as e:
+#             fail_es += 1
+#             print(f"⚠️ ES index error (msg {doc['message_id']}): {e}")
+
+#     print("\n📊 Summary for chat:", chat_id)
+#     print(f"   ✅ Inserted: {success_es}, ⏭️ Skipped (already exists): {skipped}, ⚠️ Failed: {fail_es}")
+
+
+# # ---------------------------
+# # Job wrapper
+# # ---------------------------
+# def job():
+#     with telegram:
+#         for chat_id in CHAT_IDS:
+#             try:
+#                 telegram.loop.run_until_complete(fetch_and_store(chat_id))
+#             except Exception as e:
+#                 print(f"⚠️ Skipping {chat_id} due to error: {e}")
+
+
+# # ---------------------------
+# # Main loop with scheduler
+# # ---------------------------
+# if __name__ == "__main__":
+#     # Run once at startup
+#     job()
+
+#     # Schedule every 60 minutes
+#     schedule.every(60).minutes.do(job)
+#     print("📌 Scheduler started... Fetching every 60 mins.")
+
+#     while True:
+#         schedule.run_pending()
+#         time.sleep(1)
+
+
 import os
 import io
-import schedule
 import time
+import schedule
 from dotenv import load_dotenv
 from telethon import TelegramClient
-from db.mongo_config import messages_collection, fs
+from datetime import datetime
+from db.es_config import es, index_name
 from db.minio_config import minio_client, bucket_name
+from search import app  # import FastAPI instance from search.py
 
+
+# ---------------------------
+# Load .env
+# ---------------------------
 load_dotenv()
 
-# Load from .env
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-phone = os.getenv("PHONE")
+# ---------------------------
+# Telegram Config
+# ---------------------------
+TELEGRAM_API_ID = int(os.getenv("API_ID"))
+TELEGRAM_API_HASH = os.getenv("API_HASH")
+TELEGRAM_PHONE = os.getenv("PHONE")
+TELEGRAM_SESSION = "telegram_session"
 
-# Setup Telegram client
-telegram = TelegramClient("session_name", api_id, api_hash)
-
-# Your channel IDs
-chat_ids = [
-    -1002654095731,
-    -1001704393040,
-    -1001330162895,
-    -1001554189930,
-    -1001401190279,
+# Channels (IDs or usernames) → add multiple
+CHAT_IDS = [
+    "DSquadOfficial"
 ]
 
-async def fetch_and_store():
-    """Fetch new messages from multiple Telegram channels and save them."""
-    await telegram.start(phone=phone)
+telegram = TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
-    for chat_id in chat_ids:
-        print(f"📌 Fetching messages from {chat_id}...")
+
+# ---------------------------
+# Helpers
+# ---------------------------
+def clean_for_indexing(doc):
+    """Convert datetime to ISO string for ES."""
+    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in doc.items()}
+
+
+def message_exists(chat_id, message_id):
+    """Check if message already exists in Elasticsearch."""
+    doc_id = f"{chat_id}_{message_id}"
+    return es.exists(index=index_name, id=doc_id)
+
+
+# ---------------------------
+# Main fetch
+# ---------------------------
+async def fetch_and_store(chat_id):
+    print(f"📌 Fetching messages from {chat_id}...")
+    success_es, skipped, fail_es = 0, 0, 0
+
+    async for message in telegram.iter_messages(chat_id, limit=50):
+        if not (message.text or message.media):
+            continue
+
+        # Skip if already indexed
+        if message_exists(chat_id, message.id):
+            skipped += 1
+            continue
+
+        media_url = None
+        if message.media:
+            file_name = f"{chat_id}_{message.id}"
+
+            try:
+                # --- In-memory upload to MinIO ---
+                buffer = io.BytesIO()
+                await message.download_media(file=buffer)
+                buffer.seek(0)
+                minio_client.put_object(
+                    bucket_name,
+                    file_name,
+                    buffer,
+                    length=len(buffer.getvalue()),
+                    content_type="application/octet-stream"
+                )
+
+                # ✅ Store the file URL instead of base64
+                media_url = f"http://{os.getenv('MINIO_ENDPOINT')}/{bucket_name}/{file_name}"
+                print(f"✅ Stored media {file_name} in MinIO")
+
+            except Exception as e:
+                print(f"⚠️ Media upload failed (msg {message.id}): {e}")
+
+        doc = {
+            "message_id": str(message.id),
+            "text": message.text,
+            "date": message.date,
+            "sender_id": str(message.sender_id) if message.sender_id else None,
+            "chat_id": str(chat_id),
+            # ✅ Save media_url instead of image_base64
+            "media_url": media_url,
+        }
+
+        clean_doc = clean_for_indexing(doc)
+
         try:
-            # Resolve entity (ensures Telethon recognizes the chat)
-            entity = await telegram.get_entity(chat_id)
-
-            async for message in telegram.iter_messages(entity, limit=50):
-                doc = {
-                    "message_id": message.id,
-                    "text": message.text,
-                    "date": str(message.date),
-                    "sender_id": message.sender_id,
-                    "chat_id": chat_id,
-                }
-
-                # --- Handle media ---
-                if message.media:
-                    buffer = io.BytesIO()
-                    await message.download_media(file=buffer)
-                    buffer.seek(0)
-
-                    content_type = getattr(message.file, "mime_type", "application/octet-stream")
-
-                    # 1) Save to GridFS
-                    file_id = fs.put(
-                        buffer,
-                        filename=f"{message.id}",
-                        content_type=content_type,
-                    )
-                    doc["gridfs_id"] = str(file_id)
-
-                    # 2) Save to MinIO
-                    buffer.seek(0)
-                    minio_client.put_object(
-                        bucket_name,
-                        f"{message.id}",
-                        buffer,
-                        length=len(buffer.getvalue()),
-                        content_type=content_type,
-                    )
-                    doc["minio_object"] = f"{message.id}"
-
-                # --- Save metadata ---
-                messages_collection.insert_one(doc)
-                print(f"✅ Saved message {message.id} from {chat_id}")
-
+            es.index(index=index_name, id=f"{chat_id}_{doc['message_id']}", document=clean_doc)
+            success_es += 1
+            print(f"✅ ES: Inserted message {doc['message_id']}")
         except Exception as e:
-            print(f"❌ Error fetching from {chat_id}: {e}")
+            fail_es += 1
+            print(f"⚠️ ES index error (msg {doc['message_id']}): {e}")
+
+    print("\n📊 Summary for chat:", chat_id)
+    print(f"   ✅ Inserted: {success_es}, ⏭️ Skipped (already exists): {skipped}, ⚠️ Failed: {fail_es}")
 
 
+# ---------------------------
+# Job wrapper
+# ---------------------------
 def job():
-    """Run async fetch task inside schedule."""
     with telegram:
-        telegram.loop.run_until_complete(fetch_and_store())
+        for chat_id in CHAT_IDS:
+            try:
+                telegram.loop.run_until_complete(fetch_and_store(chat_id))
+            except Exception as e:
+                print(f"⚠️ Skipping {chat_id} due to error: {e}")
 
 
-# Run once at startup
-job()
+# ---------------------------
+# Main loop with scheduler
+# ---------------------------
+if __name__ == "__main__":
+    # Run once at startup
+    job()
 
-# Schedule every 60 minutes
-schedule.every(60).minutes.do(job)
+    # Schedule every 60 minutes
+    schedule.every(60).minutes.do(job)
+    print("📌 Scheduler started... Fetching every 60 mins.")
 
-print("📌 Scheduler started... Fetching every 60 mins.")
-
-# Keep running forever
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
