@@ -1,63 +1,50 @@
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from db.es_config import es, index_name
-from nltk.sentiment import SentimentIntensityAnalyzer
+import asyncio
+from main import telegram, fetch_and_store
+
+app = FastAPI(title="Telegram Data Fetcher & Search API")
 
 
+# ---------------------------
+# Root Endpoint
+# ---------------------------
+@app.get("/")
+def root():
+    return {"message": "✅ Telegram Data Fetcher API is running"}
 
 
-# Initialize FastAPI
-app = FastAPI(title="Telegram Search API")
+# ---------------------------
+# Fetch messages from channel/group
+# ---------------------------
+@app.post("/fetch")
+async def fetch_messages(chat_id: str = Query(..., description="Telegram channel/group username or ID"),
+                         limit: int = Query(50, description="Number of recent messages to fetch")):
+    """
+    Fetch latest messages from a given Telegram channel/group
+    and store them into MongoDB + MinIO.
+    """
+    try:
+        async with telegram:
+            result = await fetch_and_store(chat_id, limit)
+        return {"chat_id": chat_id, "status": "success", "summary": result}
+    except Exception as e:
+        return {"chat_id": chat_id, "status": "error", "error": str(e)}
 
-# Initialize Sentiment Analyzer
-sia = SentimentIntensityAnalyzer()
 
-def analyze_sentiment(text: str) -> str:
-    """Return sentiment label: positive, negative, or neutral."""
-    if not text:
-        return "neutral"
-    scores = sia.polarity_scores(text)
-    compound = scores["compound"]
-    if compound >= 0.05:
-        return "positive"
-    elif compound <= -0.05:
-        return "negative"
-    else:
-        return "neutral"
+# ---------------------------
+# Search stored messages
+# ---------------------------
+from db.mongo_config import messages_collection
 
 @app.get("/search")
-def search(query: str = Query(..., description="Search text or keyword")):
+def search_messages(query: str = Query(..., description="Search text in stored Telegram messages"),
+                    chat_id: str = Query(None, description="Optional: filter by chat_id")):
     """
-    Search stored Telegram messages and return text + media URLs + sentiment.
+    Search for messages stored in MongoDB.
     """
-    body = {
-        "query": {
-            "multi_match": {
-                "query": query,
-                "fields": ["text"]
-            }
-        }
-    }
+    search_filter = {"text": {"$regex": query, "$options": "i"}}
+    if chat_id:
+        search_filter["chat_id"] = str(chat_id)
 
-    try:
-        res = es.search(index=index_name, body=body)
-        hits = res["hits"]["hits"]
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    results = []
-    for hit in hits:
-        src = hit["_source"]
-        text = src.get("text")
-
-        item = {
-            "message_id": src.get("message_id"),
-            "text": text,
-            "date": src.get("date"),
-            "media_url": src.get("media_url"),
-            # ✅ Add sentiment
-            "sentiment": analyze_sentiment(text)
-        }
-        results.append(item)
-
-    return {"results": results}
+    results = list(messages_collection.find(search_filter, {"_id": 0}))
+    return {"count": len(results), "results": results}
