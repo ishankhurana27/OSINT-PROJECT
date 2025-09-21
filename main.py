@@ -5,6 +5,8 @@ from telethon import TelegramClient
 from datetime import datetime
 from db.minio_config import minio_client, bucket_name
 from db.mongo_config import messages_collection  # ✅ Use MongoDB
+# from db.minio_config import minio_client, telegram_bucket
+
 
 
 # ---------------------------

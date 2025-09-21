@@ -1,3 +1,9 @@
 telethon
 pymongo
 python-dotenv
+fastapi
+uvicorn[standard]
+tweepy
+python-dotenv
+minio
+httpx
