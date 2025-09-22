@@ -7,3 +7,12 @@ tweepy
 python-dotenv
 minio
 httpx
+
+
+feedparser
+boto3
+beautifulsoup4
+requests
+pyyaml
+transformers
+torch
